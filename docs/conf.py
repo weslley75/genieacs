@@ -61,3 +61,5 @@ html_theme_options = {
 html_static_path = ['_static']
 
 master_doc = 'index'
+
+highlight_language = 'javascript'
