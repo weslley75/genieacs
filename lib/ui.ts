@@ -31,7 +31,9 @@ import Authorizer from "./common/authorizer";
 import * as logger from "./logger";
 import * as localCache from "./local-cache";
 import { PermissionSet } from "./types";
-import { authSimple } from "./ui/api-functions";
+import { authLocal } from "./ui/api-functions";
+import * as init from "./init";
+import { version as VERSION } from "../package.json";
 
 declare module "koa" {
   interface Request {
@@ -45,14 +47,6 @@ const router = new Router();
 const JWT_SECRET = "" + config.get("UI_JWT_SECRET");
 const JWT_COOKIE = "genieacs-ui-jwt";
 
-function getPermissionSets(ctx): PermissionSet[] {
-  const allPermissions = localCache.getPermissions(ctx.state.configSnapshot);
-  const permissionSets = ctx.state.user.roles.map(role =>
-    Object.values(allPermissions[role] || {})
-  );
-  return permissionSets;
-}
-
 koa.on("error", async err => {
   throw err;
 });
@@ -61,6 +55,7 @@ koa.use(async (ctx, next) => {
   const configSnapshot = await localCache.getCurrentSnapshot();
   ctx.state.configSnapshot = configSnapshot;
   ctx.set("X-Config-Snapshot", configSnapshot);
+  ctx.set("GenieACS-Version", VERSION);
   return next();
 });
 
@@ -68,14 +63,39 @@ koa.use(
   koaJwt({
     secret: JWT_SECRET,
     passthrough: true,
-    cookie: JWT_COOKIE
+    cookie: JWT_COOKIE,
+    isRevoked: async (ctx, token) => {
+      if (token["authMethod"] === "local") {
+        return !localCache.getUsers(ctx.state.configSnapshot)[
+          token["username"]
+        ];
+      }
+
+      return true;
+    }
   })
 );
 
 koa.use(async (ctx, next) => {
-  if (ctx.state.user && ctx.state.user.roles)
-    ctx.state.authorizer = new Authorizer(getPermissionSets(ctx));
-  else ctx.state.authorizer = new Authorizer([]);
+  const permissionSets: PermissionSet[] = [];
+
+  if (ctx.state.user && ctx.state.user.username) {
+    const allPermissions = localCache.getPermissions(ctx.state.configSnapshot);
+
+    let user;
+    if (ctx.state.user.authMethod === "local") {
+      user = localCache.getUsers(ctx.state.configSnapshot)[
+        ctx.state.user.username
+      ];
+    } else {
+      throw new Error("Invalid auth method");
+    }
+
+    for (const role of (user.roles || []).sort())
+      permissionSets.push(Object.values(allPermissions[role] || {}));
+  }
+
+  ctx.state.authorizer = new Authorizer(permissionSets);
 
   return next();
 });
@@ -98,9 +118,9 @@ router.post("/login", async ctx => {
     method: null
   };
 
-  function success(roles, method): void {
-    log.method = method;
-    const token = jwt.sign({ username, roles }, JWT_SECRET);
+  function success(authMethod): void {
+    log.method = authMethod;
+    const token = jwt.sign({ username, authMethod }, JWT_SECRET);
     ctx.cookies.set(JWT_COOKIE, token, { sameSite: "lax" });
     ctx.body = JSON.stringify(token);
     logger.accessInfo(log);
@@ -113,9 +133,8 @@ router.post("/login", async ctx => {
     logger.accessWarn(log);
   }
 
-  const roles = await authSimple(ctx.state.configSnapshot, username, password);
-
-  if (roles) return void success(roles, "simple");
+  if (await authLocal(ctx.state.configSnapshot, username, password))
+    return void success("local");
 
   failure();
 });
@@ -140,10 +159,58 @@ koa.use(async (ctx, next) => {
 koa.use(koaBodyParser());
 router.use("/api", api.routes(), api.allowedMethods());
 
+router.get("/status", ctx => {
+  ctx.body = "OK";
+});
+
+router.get("/init", async ctx => {
+  const status = await init.getStatus();
+  if (Object.keys(localCache.getUsers(ctx.state.configSnapshot)).length) {
+    if (!ctx.state.authorizer.hasAccess("users", 3)) status["users"] = false;
+    if (!ctx.state.authorizer.hasAccess("permissions", 3))
+      status["users"] = false;
+    if (!ctx.state.authorizer.hasAccess("config", 3)) {
+      status["filters"] = false;
+      status["device"] = false;
+      status["index"] = false;
+      status["overview"] = false;
+    }
+    if (!ctx.state.authorizer.hasAccess("presets", 3))
+      status["presets"] = false;
+    if (!ctx.state.authorizer.hasAccess("provisions", 3))
+      status["presets"] = false;
+  }
+
+  ctx.body = status;
+});
+
+router.post("/init", async ctx => {
+  const status = ctx.request.body;
+  if (Object.keys(localCache.getUsers(ctx.state.configSnapshot)).length) {
+    if (!ctx.state.authorizer.hasAccess("users", 3)) status["users"] = false;
+    if (!ctx.state.authorizer.hasAccess("permissions", 3))
+      status["users"] = false;
+    if (!ctx.state.authorizer.hasAccess("config", 3)) {
+      status["filters"] = false;
+      status["device"] = false;
+      status["index"] = false;
+      status["overview"] = false;
+    }
+    if (!ctx.state.authorizer.hasAccess("presets", 3))
+      status["presets"] = false;
+    if (!ctx.state.authorizer.hasAccess("provisions", 3))
+      status["presets"] = false;
+  }
+  await init.seed(status);
+  ctx.body = "";
+});
+
 router.get("/", async ctx => {
-  let permissionSets = [];
-  if (ctx.state.user && ctx.state.user.roles)
-    permissionSets = getPermissionSets(ctx);
+  const permissionSets = ctx.state.authorizer.getPermissionSets();
+
+  let wizard = "";
+  if (!Object.keys(localCache.getUsers(ctx.state.configSnapshot)).length)
+    wizard = '<script>window.location.hash = "#!/wizard";</script>';
 
   ctx.body = `
   <html>
@@ -153,17 +220,19 @@ router.get("/", async ctx => {
       <link rel="stylesheet" href="app.css">
     </head>
     <body>
+    <noscript>GenieACS UI requires JavaScript to work. Please enable JavaScript in your browser.</noscript>
       <script>
         window.clientConfig = ${JSON.stringify({
           ui: localCache.getUiConfig(ctx.state.configSnapshot)
         })};
         window.configSnapshot = ${JSON.stringify(ctx.state.configSnapshot)};
+        window.genieacsVersion = ${JSON.stringify(VERSION)};
         window.username = ${JSON.stringify(
           ctx.state.user ? ctx.state.user.username : ""
         )};
         window.permissionSets = ${JSON.stringify(permissionSets)};
       </script>
-      <script src="app.js"></script>
+      <script src="app.js"></script>${wizard} 
     </body>
   </html>
   `;

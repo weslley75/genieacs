@@ -50,6 +50,7 @@ import { IncomingMessage, ServerResponse } from "http";
 import { Readable } from "stream";
 import { promisify } from "util";
 import { TLSSocket } from "tls";
+import { decode, encodingExists } from "iconv-lite";
 import { dependencies as DEPENDENCIES } from "../package.json";
 import { parseXmlDeclaration } from "./xml-parser";
 import * as debug from "./debug";
@@ -189,14 +190,15 @@ async function writeResponse(
   }
 
   const httpResponse = sessionContext.httpResponse;
+  const connection = httpResponse.connection;
+
   httpResponse.setHeader("Content-Length", Buffer.byteLength(data));
   httpResponse.writeHead(res.code, res.headers);
-  httpResponse.end(data);
-
   if (sessionContext.debug)
     debug.outgoingHttpResponse(httpResponse, sessionContext.deviceId, res.data);
+  httpResponse.end(data);
 
-  if (sessionContext.httpRequest.connection.destroyed) {
+  if (connection.destroyed) {
     logger.accessError({
       sessionContext: sessionContext,
       message: "Connection dropped"
@@ -211,7 +213,7 @@ async function writeResponse(
     }
   } else {
     sessionContext.lastActivity = Date.now();
-    currentSessions.set(sessionContext.httpRequest.connection, sessionContext);
+    currentSessions.set(connection, sessionContext);
   }
 }
 
@@ -302,9 +304,9 @@ async function inform(sessionContext: SessionContext, rpc): Promise<void> {
   );
 
   if (cookiesPath) {
-    res.headers["Set-Cookie"] = `session=${
-      sessionContext.sessionId
-    }; Path=${cookiesPath}`;
+    res.headers[
+      "Set-Cookie"
+    ] = `session=${sessionContext.sessionId}; Path=${cookiesPath}`;
   } else {
     res.headers["Set-Cookie"] = `session=${sessionContext.sessionId}`;
   }
@@ -772,7 +774,7 @@ async function sendAcsRequest(
     downloadRequest.fileSize = 0;
     if (!downloadRequest.url) {
       const FS_PORT = config.get("FS_PORT");
-      const FS_SSL = config.get("FS_SSL");
+      const FS_SSL = config.get("FS_SSL_CERT");
       let hostname = config.get("FS_HOSTNAME");
       if (!hostname) {
         if (sessionContext.httpRequest.headers["host"])
@@ -822,11 +824,15 @@ async function getSession(connection, sessionId): Promise<SessionContext> {
   return session.deserialize(sessionContextString);
 }
 
+// Only needed to prevent tree shaking from removing the remoteAddress
+// workaround in onConnection function.
+const remoteAddressWorkaround = new WeakMap<Socket, string>();
+
 // When socket closes, store active sessions in cache
-export function onConnection(socket): void {
+export function onConnection(socket: Socket): void {
   // The property remoteAddress may be undefined after the connection is
   // closed, unless we read it at least once (caching?)
-  socket.remoteAddress;
+  remoteAddressWorkaround.set(socket, socket.remoteAddress);
 
   socket.on("close", async () => {
     const sessionContext = currentSessions.get(socket);
@@ -952,9 +958,9 @@ async function reportBadState(sessionContext: SessionContext): Promise<void> {
   const body = "Bad session state";
   httpResponse.setHeader("Content-Length", Buffer.byteLength(body));
   httpResponse.writeHead(400, { Connection: "close" });
-  httpResponse.end(body);
   if (sessionContext.debug)
     debug.outgoingHttpResponse(httpResponse, sessionContext.deviceId, body);
+  httpResponse.end(body);
 }
 
 async function responseUnauthorized(
@@ -989,9 +995,9 @@ async function responseUnauthorized(
   const body = "Unauthorized";
   httpResponse.setHeader("Content-Length", Buffer.byteLength(body));
   httpResponse.writeHead(401, resHeaders);
-  httpResponse.end(body);
   if (sessionContext.debug)
     debug.outgoingHttpResponse(httpResponse, sessionContext.deviceId, body);
+  httpResponse.end(body);
 }
 
 async function processRequest(
@@ -1105,6 +1111,15 @@ export function listener(
     });
 }
 
+function decodeString(buffer: Buffer, charset: string): string {
+  try {
+    return buffer.toString(charset);
+  } catch (err) {
+    if (encodingExists(charset)) return decode(buffer, charset);
+  }
+  return null;
+}
+
 async function listenerAsync(
   httpRequest: IncomingMessage,
   httpResponse: ServerResponse
@@ -1202,7 +1217,6 @@ async function listenerAsync(
       const _body = "Invalid session";
       httpResponse.setHeader("Content-Length", Buffer.byteLength(_body));
       httpResponse.writeHead(400, { Connection: "close" });
-      httpResponse.end(_body);
       if (sessionContext.debug) {
         debug.outgoingHttpResponse(
           httpResponse,
@@ -1210,7 +1224,7 @@ async function listenerAsync(
           _body
         );
       }
-
+      httpResponse.end(_body);
       return;
     }
   } else if (stats.concurrentRequests > MAX_CONCURRENT_REQUESTS) {
@@ -1233,10 +1247,36 @@ async function listenerAsync(
   if (!charset) {
     const parse = parseXmlDeclaration(body);
     const e = parse ? parse.find(s => s.localName === "encoding") : null;
-    charset = e ? e.value : "utf8";
+    charset = e ? e.value.toLowerCase() : "utf8";
   }
 
-  const bodyStr = body.toString(charset);
+  const bodyStr = decodeString(body, charset);
+
+  if (bodyStr == null) {
+    const msg = `Unknown encoding '${charset}'`;
+    logger.accessError({
+      message: "XML parse error",
+      parseError: msg,
+      sessionContext: sessionContext || {
+        httpRequest: httpRequest,
+        httpResponse: httpResponse
+      }
+    });
+    httpResponse.setHeader("Content-Length", Buffer.byteLength(msg));
+    httpResponse.writeHead(400, { Connection: "close" });
+    if (sessionContext) {
+      if (sessionContext.debug)
+        debug.outgoingHttpResponse(httpResponse, sessionContext.deviceId, msg);
+    } else {
+      const cacheSnapshot = await localCache.getCurrentSnapshot();
+      const d = !!localCache.getConfig(cacheSnapshot, "cwmp.debug", {
+        remoteAddress: httpResponse.connection.remoteAddress
+      });
+      if (d) debug.outgoingHttpResponse(httpResponse, null, msg);
+    }
+    httpResponse.end(msg);
+    return;
+  }
 
   async function parsedRpc(_sessionContext, rpc, parseWarnings): Promise<void> {
     for (const w of parseWarnings) {
@@ -1270,7 +1310,6 @@ async function listenerAsync(
     });
     httpResponse.setHeader("Content-Length", Buffer.byteLength(error.message));
     httpResponse.writeHead(400, { Connection: "close" });
-    httpResponse.end(error.message);
     if (sessionContext) {
       if (sessionContext.debug) {
         debug.outgoingHttpResponse(
@@ -1284,14 +1323,9 @@ async function listenerAsync(
       const d = !!localCache.getConfig(cacheSnapshot, "cwmp.debug", {
         remoteAddress: httpResponse.connection.remoteAddress
       });
-      if (d) {
-        debug.outgoingHttpResponse(
-          httpResponse,
-          sessionContext.deviceId,
-          error.message
-        );
-      }
+      if (d) debug.outgoingHttpResponse(httpResponse, null, error.message);
     }
+    httpResponse.end(error.message);
     return;
   }
 
@@ -1318,14 +1352,13 @@ async function listenerAsync(
     const _body = "Invalid session";
     httpResponse.setHeader("Content-Length", Buffer.byteLength(_body));
     httpResponse.writeHead(400, { Connection: "close" });
-    httpResponse.end(_body);
     const cacheSnapshot = await localCache.getCurrentSnapshot();
     const d = !!localCache.getConfig(cacheSnapshot, "cwmp.debug", {
       remoteAddress: httpResponse.connection.remoteAddress
     });
     if (d)
       debug.outgoingHttpResponse(httpResponse, sessionContext.deviceId, _body);
-
+    httpResponse.end(_body);
     return;
   }
 

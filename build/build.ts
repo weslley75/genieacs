@@ -28,8 +28,10 @@ import { terser } from "rollup-plugin-terser";
 import webpack from "webpack";
 import postcss from "postcss";
 import postcssImport from "postcss-import";
-import postcssCssNext from "postcss-cssnext";
+import postcssPresetEnv from "postcss-preset-env";
 import cssnano from "cssnano";
+import SVGO from "svgo";
+import * as xmlParser from "../lib/xml-parser";
 
 const MODE = process.env["NODE_ENV"] || "production";
 
@@ -62,6 +64,7 @@ const externals = [
   "child_process",
   "dgram",
   "url",
+  "iconv-lite",
   "koa",
   "koa-router",
   "koa-compress",
@@ -99,6 +102,34 @@ function stripDevDeps(deps): void {
   if (!Object.keys(deps["dependencies"]).length) delete deps["dependencies"];
 }
 
+function xmlTostring(xml): string {
+  const children = [];
+  for (const c of xml.children || []) children.push(xmlTostring(c));
+
+  return xml.name === "root" && xml.bodyIndex === 0
+    ? children.join("")
+    : `<${xml.name} ${xml.attrs}>${children.join("")}</${xml.name}>`;
+}
+
+function generateSymbol(id: string, svgStr: string): string {
+  const xml = xmlParser.parseXml(svgStr);
+  const svg = xml.children[0];
+  const svgAttrs = xmlParser.parseAttrs(svg.attrs);
+  let viewBox = "";
+  for (const a of svgAttrs) {
+    if (a.name === "viewBox") {
+      viewBox = `viewBox="${a.value}"`;
+      break;
+    }
+  }
+  const symbolBody = xml.children[0].children
+    .map(c => {
+      return xmlTostring(c);
+    })
+    .join("");
+  return `<symbol id="icon-${id}" ${viewBox}>${symbolBody}</symbol>`;
+}
+
 async function init(): Promise<void> {
   // Delete any old output directory
   rmDirSync(OUTPUT_DIR);
@@ -106,7 +137,6 @@ async function init(): Promise<void> {
   // Create output directory layout
   fs.mkdirSync(OUTPUT_DIR);
   fs.mkdirSync(OUTPUT_DIR + "/bin");
-  fs.mkdirSync(OUTPUT_DIR + "/config");
   fs.mkdirSync(OUTPUT_DIR + "/public");
   fs.mkdirSync(OUTPUT_DIR + "/tools");
 
@@ -142,8 +172,6 @@ async function copyStatic(): Promise<void> {
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
-    "config/config-sample.json",
-    "config/ext-sample.js",
     "public/logo.svg",
     "public/favicon.png"
   ];
@@ -162,14 +190,20 @@ async function generateCss(): Promise<void> {
   const cssIn = fs.readFileSync(cssInPath);
   const cssOut = await postcss([
     postcssImport,
-    postcssCssNext({ warnForDuplicates: false }),
+    postcssPresetEnv({
+      stage: 3,
+      features: {
+        "nesting-rules": true,
+        "color-mod-function": true
+      }
+    }),
     cssnano
   ]).process(cssIn, { from: cssInPath, to: cssOutPath });
   fs.writeFileSync(cssOutPath, cssOut.css);
 }
 
 async function generateToolsJs(): Promise<void> {
-  for (const bin of ["configure-ui", "dump-data-model"]) {
+  for (const bin of ["dump-data-model"]) {
     const inputFile = path.resolve(INPUT_DIR, `tools/${bin}`);
     const outputFile = path.resolve(OUTPUT_DIR, `tools/${bin}`);
     const bundle = await rollup({
@@ -194,6 +228,8 @@ async function generateToolsJs(): Promise<void> {
     await bundle.write({
       format: "cjs",
       preferConst: true,
+      sourcemap: "inline",
+      sourcemapExcludeSources: true,
       banner: "#!/usr/bin/env node",
       file: outputFile
     });
@@ -251,6 +287,8 @@ async function generateBackendJs(): Promise<void> {
     await bundle.write({
       format: "cjs",
       preferConst: true,
+      sourcemap: "inline",
+      sourcemapExcludeSources: true,
       banner: "#!/usr/bin/env node",
       file: outputFile
     });
@@ -286,6 +324,8 @@ async function generateFrontendJs(): Promise<void> {
   await bundle.write({
     preferConst: true,
     format: "esm",
+    sourcemap: "inline",
+    sourcemapExcludeSources: true,
     file: outputFile
   });
 
@@ -294,6 +334,16 @@ async function generateFrontendJs(): Promise<void> {
     entry: outputFile,
     resolve: {
       aliasFields: ["module"]
+    },
+    devtool: "nosources-source-map",
+    module: {
+      rules: [
+        {
+          test: /\.js$/,
+          use: ["source-map-loader"],
+          enforce: "pre"
+        }
+      ]
     },
     output: {
       path: path.resolve(OUTPUT_DIR, "public"),
@@ -305,11 +355,28 @@ async function generateFrontendJs(): Promise<void> {
   process.stdout.write(stats.toString({ colors: true }) + "\n");
 }
 
+async function generateIconsSprite(): Promise<void> {
+  const svgo = new SVGO({ plugins: [{ removeViewBox: false }] });
+  const symbols = [];
+  const iconsDir = path.resolve(INPUT_DIR, "ui/icons");
+  for (const file of fs.readdirSync(iconsDir)) {
+    const id = path.parse(file).name;
+    const filePath = path.join(iconsDir, file);
+    const { data } = await svgo.optimize(fs.readFileSync(filePath).toString());
+    symbols.push(generateSymbol(id, data));
+  }
+  fs.writeFileSync(
+    path.resolve(OUTPUT_DIR, "public/icons.svg"),
+    `<svg xmlns="http://www.w3.org/2000/svg">${symbols.join("")}</svg>`
+  );
+}
+
 init()
   .then(() => {
     Promise.all([
       copyStatic(),
       generateCss(),
+      generateIconsSprite(),
       generateToolsJs(),
       generateBackendJs(),
       generateFrontendJs()

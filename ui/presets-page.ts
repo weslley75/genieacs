@@ -166,7 +166,7 @@ export const component: ClosureComponent = (): Component => {
       function onFilterChanged(filter): void {
         const ops = { filter };
         if (vnode.attrs["sort"]) ops["sort"] = vnode.attrs["sort"];
-        m.route.set(m.route.get(), ops);
+        m.route.set("/admin/presets", ops);
       }
 
       const sort = vnode.attrs["sort"]
@@ -197,7 +197,7 @@ export const component: ClosureComponent = (): Component => {
 
         const ops = { sort: JSON.stringify(_sort) };
         if (vnode.attrs["filter"]) ops["filter"] = vnode.attrs["filter"];
-        m.route.set(m.route.get(), ops);
+        m.route.set("/admin/presets", ops);
       }
 
       let filter = vnode.attrs["filter"]
@@ -211,43 +211,63 @@ export const component: ClosureComponent = (): Component => {
       });
       const count = store.count("presets", filter);
 
+      const userDefinedProvisions: Set<string> = new Set();
+
+      const provisionIds = new Set([
+        "refresh",
+        "value",
+        "tag",
+        "reboot",
+        "reset",
+        "download",
+        "instances"
+      ]);
+
       const provisions = store.fetch("provisions", true);
       if (provisions.fulfilled) {
-        const provisionAttr = attributes.find(attr => {
-          return attr.id === "provision";
-        });
-
-        const provisionIds = new Set([
-          "refresh",
-          "value",
-          "tag",
-          "reboot",
-          "reset",
-          "download",
-          "instances"
-        ]);
-
-        for (const p of provisions.value) provisionIds.add(p["_id"]);
-
-        provisionAttr["options"] = Array.from(provisionIds);
+        for (const p of provisions.value) {
+          userDefinedProvisions.add(p["_id"]);
+          provisionIds.add(p["_id"]);
+        }
       }
+
+      const provisionAttr = attributes.find(attr => {
+        return attr.id === "provision";
+      });
+      provisionAttr["options"] = Array.from(provisionIds);
 
       const downloadUrl = getDownloadUrl(filter);
 
       const valueCallback = (attr, preset): {} => {
-        if (attr.id !== "precondition") return preset[attr.id];
-        let devicesUrl = "/#!/devices";
-        if (preset["precondition"].length) {
-          devicesUrl += `?${m.buildQueryString({
-            filter: preset["precondition"]
-          })}`;
-        }
+        if (attr.id === "precondition") {
+          let devicesUrl = "/#!/devices";
+          if (preset["precondition"].length) {
+            devicesUrl += `?${m.buildQueryString({
+              filter: preset["precondition"]
+            })}`;
+          }
 
-        return m(
-          "a",
-          { href: devicesUrl, title: preset["precondition"] },
-          preset["precondition"]
-        );
+          return m(
+            "a",
+            { href: devicesUrl, title: preset["precondition"] },
+            preset["precondition"]
+          );
+        } else if (
+          attr.id === "provision" &&
+          userDefinedProvisions.has(preset[attr.id])
+        ) {
+          return m(
+            "a",
+            {
+              href: `/#!/admin/provisions?${m.buildQueryString({
+                filter: `Q("ID", "${preset["provision"]}")`
+              })}`
+            },
+            preset["provision"]
+          );
+        } else {
+          return preset[attr.id];
+        }
       };
 
       const attrs = {};
@@ -266,6 +286,14 @@ export const component: ClosureComponent = (): Component => {
             {
               onclick: () => {
                 const cb = (): Children => {
+                  if (!preset.provision) {
+                    return m(
+                      "div",
+                      { style: "margin:20px" },
+                      "This UI only supports presets with a single 'provision' configuraiton. If this preset was originally created from the old UI (genieacs-gui), you must edit it there."
+                    );
+                  }
+
                   return m(
                     putFormComponent,
                     Object.assign(

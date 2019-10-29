@@ -21,13 +21,13 @@ import * as url from "url";
 import * as mongodb from "mongodb";
 import * as querystring from "querystring";
 import * as vm from "vm";
-import { exec } from "child_process";
 import * as config from "./config";
 import * as db from "./db";
 import * as query from "./query";
 import * as apiFunctions from "./api-functions";
 import * as cache from "./cache";
 import { version as VERSION } from "../package.json";
+import { ping } from "./ping";
 
 const DEVICE_TASKS_REGEX = /^\/devices\/([a-zA-Z0-9\-_%]+)\/tasks\/?$/;
 const TASKS_REGEX = /^\/tasks\/([a-zA-Z0-9\-_%]+)(\/[a-zA-Z_]*)?$/;
@@ -55,13 +55,10 @@ export function listener(request, response): void {
   let bytes = 0;
   response.setHeader("GenieACS-Version", VERSION);
 
-  request.addListener(
-    "data",
-    (chunk): void => {
-      chunks.push(chunk);
-      bytes += chunk.length;
-    }
-  );
+  request.addListener("data", (chunk): void => {
+    chunks.push(chunk);
+    bytes += chunk.length;
+  });
 
   function getBody(): Buffer {
     // Write all chunks into a Buffer
@@ -594,8 +591,9 @@ export function listener(request, response): void {
       }
     } else if (PING_REGEX.test(urlParts.pathname)) {
       const host = querystring.unescape(PING_REGEX.exec(urlParts.pathname)[1]);
-      exec(`ping -w 1 -i 0.2 -c 3 ${host}`, (err, stdout) => {
+      ping(host, (err, res, stdout) => {
         if (err) {
+          if (!res) throwError(err, response);
           response.writeHead(404, { "Cache-Control": "no-cache" });
           response.end(`${err.name}: ${err.message}`);
           return;

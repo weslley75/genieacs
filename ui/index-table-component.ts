@@ -19,6 +19,7 @@
 
 import { ClosureComponent, Component, Children } from "mithril";
 import { m } from "./components";
+import { getIcon } from "./icons";
 
 interface Attribute {
   id?: string;
@@ -40,21 +41,34 @@ function renderTable(
   recordActionsCallback?: Children | ((record: Record<string, any>) => Children)
 ): Children {
   const records = data || [];
-  const selectAll = m("input", {
-    type: "checkbox",
-    checked: records.length && selected.size === records.length,
-    onchange: e => {
-      for (const record of records) {
-        const id = record["_id"] || record["DeviceID.ID"].value[0];
-        if (e.target.checked) selected.add(id);
-        else selected.delete(id);
-      }
-    },
-    disabled: !total
-  });
+
+  // Actions bar
+  let buttons: Children = [];
+  if (typeof actionsCallback === "function") {
+    buttons = actionsCallback(selected);
+    if (!Array.isArray(buttons)) buttons = [buttons];
+  } else if (Array.isArray(actionsCallback)) {
+    buttons = actionsCallback;
+  }
 
   // Table header
-  const labels = [m("th", selectAll)];
+  const labels = [];
+  if (buttons.length) {
+    const selectAll = m("input", {
+      type: "checkbox",
+      checked: records.length && selected.size === records.length,
+      onchange: e => {
+        for (const record of records) {
+          const id = record["_id"] || record["DeviceID.ID"].value[0];
+          if (e.target.checked) selected.add(id);
+          else selected.delete(id);
+        }
+      },
+      disabled: !total
+    });
+    labels.push(m("th", selectAll));
+  }
+
   for (let i = 0; i < attributes.length; i++) {
     const attr = attributes[i];
     const label = attr.label;
@@ -65,9 +79,9 @@ function renderTable(
 
     let direction = 1;
 
-    let symbol = "\u2981";
-    if (sortAttributes[i] > 0) symbol = "\u2bc6";
-    else if (sortAttributes[i] < 0) symbol = "\u2bc5";
+    let symbol = getIcon("unsorted");
+    if (sortAttributes[i] > 0) symbol = getIcon("sorted-asc");
+    else if (sortAttributes[i] < 0) symbol = getIcon("sorted-dsc");
 
     const sortable = m(
       "button",
@@ -87,20 +101,23 @@ function renderTable(
   const rows = [];
   for (const record of records) {
     const id = record["_id"] || record["DeviceID.ID"].value[0];
-    const checkbox = m("input", {
-      type: "checkbox",
-      checked: selected.has(id),
-      onchange: e => {
-        if (e.target.checked) selected.add(id);
-        else selected.delete(id);
-      },
-      onclick: e => {
-        e.stopPropagation();
-        e.redraw = false;
-      }
-    });
+    const tds = [];
+    if (buttons.length) {
+      const checkbox = m("input", {
+        type: "checkbox",
+        checked: selected.has(id),
+        onchange: e => {
+          if (e.target.checked) selected.add(id);
+          else selected.delete(id);
+        },
+        onclick: e => {
+          e.stopPropagation();
+          e.redraw = false;
+        }
+      });
+      tds.push(m("td", checkbox));
+    }
 
-    const tds = [m("td", checkbox)];
     for (const attr of attributes) {
       const attrs = {};
       let valueComponent;
@@ -179,15 +196,6 @@ function renderTable(
     "tfoot",
     m("tr", m("td", { colspan: labels.length }, footerElements))
   );
-
-  // Actions bar
-  let buttons: Children = [];
-  if (typeof actionsCallback === "function") {
-    buttons = actionsCallback(selected);
-    if (!Array.isArray(buttons)) buttons = [buttons];
-  } else if (Array.isArray(actionsCallback)) {
-    buttons = actionsCallback;
-  }
 
   const children = [
     m(

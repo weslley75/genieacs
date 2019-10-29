@@ -78,7 +78,7 @@ i {
 
 @keyframes pending-blink {
   from {
-    background-color: color(var(--status-green) a(90%));
+    background-color: color-mod(var(--status-green) a(90%));
   }
   to {
     background-color: transparent;
@@ -141,10 +141,10 @@ body {
           }
         }
         & > .stale.active {
-          background-color: color(var(--status-gray) a(90%));
+          background-color: color-mod(var(--status-gray) a(90%));
         }
         & > .fault.active {
-          background-color: color(var(--status-red) a(90%));
+          background-color: color-mod(var(--status-red) a(90%));
         }
         & > .queued.active {
           font-weight: bold;
@@ -183,11 +183,11 @@ body {
           border-radius: 0.4em;
         }
         & > .stale {
-          background-color: color(var(--status-gray) a(90%));
+          background-color: color-mod(var(--status-gray) a(90%));
           border-radius: 0.4em;
         }
         & > .fault {
-          background-color: color(var(--status-red) a(90%));
+          background-color: color-mod(var(--status-red) a(90%));
           border-radius: 0.4em;
         }
         & .parameter {
@@ -227,15 +227,15 @@ body {
         transition: opacity var(--fade), top var(--fade);
 
         &.error {
-          background-color: color(var(--status-red) a(90%));
+          background-color: color-mod(var(--status-red) a(90%));
           border: 1px solid var(--status-red);
         }
         &.success {
-          background-color: color(var(--status-green) a(90%));
+          background-color: color-mod(var(--status-green) a(90%));
           border: 1px solid var(--status-green);
         }
         &.warning {
-          background-color: color(var(--status-yellow) a(90%));
+          background-color: color-mod(var(--status-yellow) a(90%));
           border: 1px solid var(--status-yellow);
         }
       }
@@ -385,23 +385,17 @@ h1 {
   color: var(--color4);
   font-size: 130%;
   font-weight: bold;
-  margin-top: 1em;
-  margin-bottom: 0.5em;
 }
 
 h2 {
   color: var(--color5);
   font-weight: bold;
   font-size: 120%;
-  margin-top: 1em;
-  margin-bottom: 0.5em;
 }
 
 h3 {
   color: var(--color5);
   font-size: 110%;
-  margin-top: 1em;
-  margin-bottom: 0.5em;
 }
 
 p.error {
@@ -421,6 +415,9 @@ button {
   color: var(--color4);
   border-radius: 4px;
   transition: background-color var(--fade), color var(--fade);
+  display: inline-block;
+  vertical-align: middle;
+
   &.primary {
     border: 1px solid var(--color1);
     background-color: var(--color3);
@@ -615,6 +612,7 @@ span.na {
 
 .actions-bar {
   margin-top: 10px;
+  margin-bottom: 10px;
   & > button {
     margin-right: 10px;
   }
@@ -714,5 +712,29 @@ span.parameter-value {
   & > span:empty::before {
     content: "blank";
     color: #aaa;
+  }
+}
+
+.wizard-dialog {
+  max-width: 720px;
+  margin: 10px auto;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid var(--color1);
+  box-shadow: 0 0 10px #ccc;
+}
+
+.icon {
+  display: inline-block;
+  vertical-align: middle;
+  width: 1em;
+  height: 1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  &.icon-unsorted {
+    opacity: 0.3;
   }
 }

@@ -34,8 +34,6 @@ export function processDeviceFilter(filter): Expression {
       else if (p === "DeviceID") return ["PARAM", "_deviceId"];
       else if (p.startsWith("DeviceID."))
         return ["PARAM", "_deviceId._" + p.slice(9)];
-      else if (p === "Tags") return ["PARAM", "_tags"];
-      else if (p === "tag") return ["PARAM", "_tags"];
       else if (p === "Events.Inform") return ["PARAM", "_lastInform"];
       else if (p === "Events.Registered") return ["PARAM", "_registered"];
       else if (p === "Events.0_BOOTSTRAP") return ["PARAM", "_lastBootstrap"];
@@ -49,6 +47,8 @@ export function processDeviceFilter(filter): Expression {
       if (exp[0] === "IS NULL") return ["<>", ["PARAM", "_tags"], t];
       else if (exp[0] === "IS NOT NULL") return ["=", ["PARAM", "_tags"], t];
       else if (exp[0] === "=" && exp[2] === true)
+        return ["=", ["PARAM", "_tags"], t];
+      else if (exp[0] === "<>" && exp[2] !== true)
         return ["=", ["PARAM", "_tags"], t];
     } else if (
       ["=", "<>", ">", ">=", "<", "<=", "LIKE", "NOT LIKE"].includes(exp[0])
@@ -380,7 +380,7 @@ export function flattenDevice(device): FlatDevice {
           };
         } else if (name === "_tags") {
           output["Tags"] = {
-            writable: true,
+            writable: false,
             writableTimestamp: timestamp,
             object: true,
             objectTimestamp: timestamp
@@ -390,7 +390,7 @@ export function flattenDevice(device): FlatDevice {
             output[`Tags.${t}`] = {
               value: [true, "xsd:boolean"],
               valueTimestamp: timestamp,
-              writable: false,
+              writable: true,
               writableTimestamp: timestamp,
               object: false,
               objectTimestamp: timestamp
@@ -560,16 +560,17 @@ export function flattenPreset(preset): {} {
 
   const provision = p.configurations[0];
   if (
-    p.configurations.length !== 1 ||
-    provision.type !== "provision" ||
-    !provision.name ||
-    !provision.name.length
-  )
-    throw new Error("Invalid preset provision");
-  p.provision = provision.name;
-  p.provisionArgs = provision.args
-    ? JSON.stringify(provision.args).slice(1, -1)
-    : "";
+    p.configurations.length === 1 &&
+    provision.type === "provision" &&
+    provision.name &&
+    provision.name.length
+  ) {
+    p.provision = provision.name;
+    p.provisionArgs = provision.args
+      ? JSON.stringify(provision.args).slice(1, -1)
+      : "";
+  }
+
   delete p.configurations;
   return p;
 }

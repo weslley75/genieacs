@@ -132,6 +132,46 @@ function queryMac(param, value): Expression {
   ];
 }
 
+function queryTag(tag: string): Expression {
+  const t = tag.replace(/[^a-zA-Z0-9-]+/g, "_");
+  return ["IS NOT NULL", ["PARAM", `Tags.${t}`]];
+}
+
+export function getTip(resource, label): string {
+  let tip;
+  if (resources[resource] && resources[resource][label]) {
+    const param = resources[resource][label];
+    const types =
+      resource === "devices" ? param["type"] : param["type"].split(",");
+
+    const tips = [];
+    for (const type of types) {
+      switch (type.trim()) {
+        case "string":
+          tips.push("case insensitive string pattern");
+          break;
+        case "number":
+          tips.push("numeric value");
+          break;
+        case "timestamp":
+          tips.push(
+            "Unix timestamp or string in the form YYYY-MM-DDTHH:mm:ss.sssZ"
+          );
+          break;
+        case "mac":
+          tips.push("partial case insensitive MAC address");
+          break;
+        case "tag":
+          tips.push("case sensitive string");
+          break;
+      }
+    }
+
+    if (tips.length) tip = `${label}: ${tips.join(", ")}`;
+  }
+  return tip;
+}
+
 export function unpack(resource, label, value): Expression {
   if (!resources[resource]) return null;
   const type = resources[resource][label].type;
@@ -155,6 +195,11 @@ export function unpack(resource, label, value): Expression {
 
   if (type.includes("mac")) {
     const q = queryMac(resources[resource][label].parameter, value);
+    if (q) res.push(q);
+  }
+
+  if (type.includes("tag")) {
+    const q = queryTag(value);
     if (q) res.push(q);
   }
 

@@ -104,13 +104,14 @@ function putActionHandler(action, _object): Promise<ValidationErrors> {
             object
           );
 
-          m.request({
-            method: "PUT",
-            headers: headers,
-            url: `/api/files/${encodeURIComponent(id)}`,
-            serialize: body => body, // Identity function to prevent JSON.parse on blob data
-            data: file
-          })
+          store
+            .xhrRequest({
+              method: "PUT",
+              headers: headers,
+              url: `/api/files/${encodeURIComponent(id)}`,
+              serialize: body => body, // Identity function to prevent JSON.parse on blob data
+              body: file
+            })
             .then(() => {
               notifications.push(
                 "success",
@@ -163,7 +164,7 @@ export const component: ClosureComponent = (): Component => {
       function onFilterChanged(filter): void {
         const ops = { filter };
         if (vnode.attrs["sort"]) ops["sort"] = vnode.attrs["sort"];
-        m.route.set(m.route.get(), ops);
+        m.route.set("/admin/files", ops);
       }
 
       const sort = vnode.attrs["sort"]
@@ -184,7 +185,7 @@ export const component: ClosureComponent = (): Component => {
 
         const ops = { sort: JSON.stringify(_sort) };
         if (vnode.attrs["filter"]) ops["filter"] = vnode.attrs["filter"];
-        m.route.set(m.route.get(), ops);
+        m.route.set("/admin/files", ops);
       }
 
       let filter = vnode.attrs["filter"]

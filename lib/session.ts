@@ -537,15 +537,29 @@ async function runProvisions(
       if (!allProvisions[provision[0]]) {
         if (defaultProvisions[provision[0]]) {
           const dec = [];
-          const done = defaultProvisions[provision[0]](
-            sessionContext,
-            provision,
-            dec,
-            startRevision,
-            endRevision
-          );
+          let done = true;
+          let fault = null;
+          try {
+            done = defaultProvisions[provision[0]](
+              sessionContext,
+              provision,
+              dec,
+              startRevision,
+              endRevision
+            );
+          } catch (err) {
+            fault = {
+              code: `script.${err.name}`,
+              message: err.message,
+              detail: {
+                name: err.name,
+                message: err.message,
+                stack: `${err.name}: ${err.message}\n    at ${provision[0]}`
+              }
+            };
+          }
           return {
-            fault: null,
+            fault: fault,
             clear: null,
             declare: dec,
             done: done,
@@ -635,9 +649,7 @@ async function runVirtualParameters(
         ) {
           r.fault = {
             code: "script",
-            message: `Virtual parameter '${
-              provision[0]
-            }' must provide 'writable' attribute`
+            message: `Virtual parameter '${provision[0]}' must provide 'writable' attribute`
           };
           return r;
         }
@@ -668,9 +680,7 @@ async function runVirtualParameters(
         } else if (provision[1].value != null || provision[2].value != null) {
           r.fault = {
             code: "script",
-            message: `Virtual parameter '${
-              provision[0]
-            }' must provide 'value' attribute`
+            message: `Virtual parameter '${provision[0]}' must provide 'value' attribute`
           };
           return r;
         }
@@ -774,6 +784,9 @@ function runDeclarations(
   for (const declaration of declarations) {
     let path = declaration.path;
     let unpacked: Path[];
+
+    // Can't run declarations on root
+    if (!path.length) continue;
 
     if (
       (path.alias | path.wildcard) & 1 ||
@@ -1526,7 +1539,7 @@ function generateGetRpcRequest(sessionContext: SessionContext): GetAcsRequest {
       let nextLevel;
       let est = 0;
       if (path.length >= GPN_NEXT_LEVEL) {
-        const patterns = [[path, 0]];
+        const patterns: [Path, number][] = [[path, 0]];
         for (const p of sessionContext.deviceData.paths.find(
           path,
           true,
@@ -1858,9 +1871,8 @@ function processDeclarations(
 
   const root = sessionContext.deviceData.paths.add(Path.parse(""));
   const paths = deviceData.paths.find(root, false, true, 99);
-  paths.sort(
-    (a, b): number =>
-      a.wildcard === b.wildcard ? a.length - b.length : a.wildcard - b.wildcard
+  paths.sort((a, b): number =>
+    a.wildcard === b.wildcard ? a.length - b.length : a.wildcard - b.wildcard
   );
 
   const virtualParameterDeclarations = [] as VirtualParameterDeclaration[];
@@ -2139,7 +2151,7 @@ function processInstances(
   defer: boolean
 ): void {
   parent = sessionContext.deviceData.paths.add(parent);
-  let instancesToCreate, instancesToDelete;
+  let instancesToCreate: InstanceSet, instancesToDelete: Set<Path>;
   if (parent.segments[0] === "Downloads") {
     if (parent.length !== 1) return;
     instancesToDelete = sessionContext.syncState.downloadsToDelete;
@@ -2626,8 +2638,13 @@ export async function serialize(
     deviceData.push(e);
   }
 
+  const declarations = sessionContext.declarations.map(decs => {
+    return decs.map(d => Object.assign({}, d, { path: d.path.toString() }));
+  });
+
   const jsonSessionContext = Object.assign({}, sessionContext, {
     deviceData: deviceData,
+    declarations: declarations,
     syncState: null,
     toLoad: null,
     httpRequest: null,

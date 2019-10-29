@@ -29,6 +29,7 @@ import * as smartQuery from "./smart-query";
 import { map, parse, stringify } from "../lib/common/expression-parser";
 import filterComponent from "./filter-component";
 import { Children, ClosureComponent, Component } from "mithril";
+import { getIcon } from "./icons";
 
 const PAGE_SIZE = config.ui.pageSize || 10;
 
@@ -47,6 +48,7 @@ const attributes = [
       "faults",
       "files",
       "permissions",
+      "users",
       "presets",
       "provisions",
       "virtualParameters"
@@ -186,7 +188,7 @@ export const component: ClosureComponent = (): Component => {
       function onFilterChanged(filter): void {
         const ops = { filter };
         if (vnode.attrs["sort"]) ops["sort"] = vnode.attrs["sort"];
-        m.route.set(m.route.get(), ops);
+        m.route.set("/admin/permissions", ops);
       }
 
       const sort = vnode.attrs["sort"]
@@ -210,7 +212,7 @@ export const component: ClosureComponent = (): Component => {
 
         const ops = { sort: JSON.stringify(_sort) };
         if (vnode.attrs["filter"]) ops["filter"] = vnode.attrs["filter"];
-        m.route.set(m.route.get(), ops);
+        m.route.set("/admin/permissions", ops);
       }
 
       let filter = vnode.attrs["filter"]
@@ -269,7 +271,7 @@ export const component: ClosureComponent = (): Component => {
                   });
                 }
               },
-              "✕"
+              getIcon("remove")
             )
           ];
         };

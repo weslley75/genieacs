@@ -88,7 +88,7 @@ export async function connectionRequest(deviceId): Promise<void> {
   const now = Date.now();
   const UDP_CONNECTION_REQUEST_PORT = +getConfig(
     snapshot,
-    "cwmp.udpConnectionRequestAuth",
+    "cwmp.udpConnectionRequestPort",
     context,
     now
   );
@@ -174,6 +174,70 @@ function sanitizeTask(task): void {
     if (common.typeOf(task.expiry) === common.DATE_TYPE || isNaN(task.expiry))
       task.expiry = new Date(task.expiry);
     else task.expiry = new Date(task.timestamp.getTime() + +task.expiry * 1000);
+  }
+
+  const validParamValue = (p): boolean => {
+    if (
+      !Array.isArray(p) ||
+      p.length < 2 ||
+      typeof p[0] !== "string" ||
+      !p[0].length ||
+      !["string", "boolean", "number"].includes(typeof p[1]) ||
+      (p[2] != null && typeof p[2] !== "string")
+    )
+      return false;
+    return true;
+  };
+
+  switch (task.name) {
+    case "getParameterValues":
+      if (!Array.isArray(task.parameterNames) || !task.parameterNames.length)
+        throw new Error("Missing 'parameterNames' property");
+      for (const p of task.parameterNames) {
+        if (typeof p !== "string" || !p.length)
+          throw new Error(`Invalid parameter name '${p}'`);
+      }
+      break;
+
+    case "setParameterValues":
+      if (!Array.isArray(task.parameterValues) || !task.parameterValues.length)
+        throw new Error("Missing 'parameterValues' property");
+      for (const p of task.parameterValues) {
+        if (!validParamValue(p))
+          throw new Error(`Invalid parameter value '${p}'`);
+      }
+      break;
+
+    case "refreshObject":
+    case "deleteObject":
+      if (typeof task.objectName !== "string" || !task.objectName.length)
+        throw new Error("Missing 'objectName' property");
+      break;
+
+    case "addObject":
+      if (task.parameterValues != null) {
+        if (!Array.isArray(task.parameterValues))
+          throw new Error("Invalid 'parameterValues' property");
+        for (const p of task.parameterValues) {
+          if (!validParamValue(p))
+            throw new Error(`Invalid parameter value '${p}'`);
+        }
+      }
+      break;
+
+    case "download":
+      if (typeof task.fileType !== "string" || !task.fileType.length)
+        throw new Error("Missing 'fileType' property");
+
+      if (typeof task.fileName !== "string" || !task.fileName.length)
+        throw new Error("Missing 'fileName' property");
+
+      if (
+        task.targetFileName != null &&
+        typeof task.targetFileName !== "string"
+      )
+        throw new Error("Invalid 'targetFileName' property");
+      break;
   }
 
   return task;

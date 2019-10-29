@@ -17,7 +17,6 @@
  * along with GenieACS.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-import { exec } from "child_process";
 import { ObjectID } from "mongodb";
 import * as db from "./db";
 import { del } from "../cache";
@@ -149,29 +148,6 @@ interface PingResponse {
   mdev: number;
 }
 
-export function ping(host): Promise<PingResponse> {
-  return new Promise((resolve, reject) => {
-    exec(`ping -w 1 -i 0.2 -c 3 ${host}`, (err, stdout) => {
-      if (err) return void reject(err);
-
-      const m = stdout.match(
-        /(\d) packets transmitted, (\d) received, ([\d.%]+) packet loss[^]*([\d.]+)\/([\d.]+)\/([\d.]+)\/([\d.]+)/
-      );
-      if (!m) return void reject(new Error("Could not parse ping response"));
-
-      resolve({
-        packetsTransmitted: +m[1],
-        packetsReceived: +m[2],
-        packetLoss: m[3],
-        min: +m[4],
-        avg: +m[5],
-        max: +m[6],
-        mdev: +m[7]
-      });
-    });
-  });
-}
-
 export async function putResource(resource, id, data): Promise<void> {
   if (resource === "presets") {
     await db.putPreset(id, data);
@@ -192,15 +168,15 @@ export async function putResource(resource, id, data): Promise<void> {
   await del("presets_hash");
 }
 
-export function authSimple(snapshot, username, password): Promise<string[]> {
+export function authLocal(snapshot, username, password): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const users = getUsers(snapshot);
     const user = users[username];
     if (!user || !user.password) return void resolve(null);
     hashPassword(password, user.salt)
       .then(hash => {
-        if (hash === user.password) resolve(user.roles);
-        else resolve(null);
+        if (hash === user.password) resolve(true);
+        else resolve(false);
       })
       .catch(reject);
   });

@@ -18,18 +18,18 @@
  */
 
 import m from "mithril";
-import { map, stringify } from "../lib/common/expression-parser";
+import { stringify } from "../lib/common/expression-parser";
 import { or, and, not, evaluate, subset } from "../lib/common/expression";
 import memoize from "../lib/common/memoize";
 import { QueryOptions, Expression } from "../lib/types";
 import * as notifications from "./notifications";
-import { configSnapshot } from "./config";
+import { configSnapshot, genieacsVersion } from "./config";
 
 const memoizedStringify = memoize(stringify);
 const memoizedEvaluate = memoize(evaluate);
 
 let fulfillTimestamp = 0;
-let refreshNotification;
+let connectionNotification, configNotification, versionNotification;
 
 const queries = {
   filter: new WeakMap(),
@@ -89,6 +89,71 @@ class QueryResponse {
   }
 }
 
+function checkConnection(): void {
+  m.request({
+    url: "/status",
+    method: "GET",
+    background: true,
+    extract: xhr => {
+      if (xhr.status !== 200) {
+        if (!connectionNotification) {
+          connectionNotification = notifications.push(
+            "warning",
+            "Server is unreachable",
+            {}
+          );
+        }
+      } else {
+        if (connectionNotification) {
+          notifications.dismiss(connectionNotification);
+          connectionNotification = null;
+        }
+
+        const configChanged =
+          xhr.getResponseHeader("x-config-snapshot") !== configSnapshot;
+        const versionChanged =
+          xhr.getResponseHeader("genieacs-version") !== genieacsVersion;
+
+        if (!configNotification !== !configChanged) {
+          if (configNotification) {
+            notifications.dismiss(configNotification);
+            configNotification = null;
+          } else {
+            configNotification = notifications.push(
+              "warning",
+              "Configuration has been modified, please reload the page",
+              {
+                Reload: () => {
+                  window.location.reload();
+                }
+              }
+            );
+          }
+        }
+
+        if (!versionNotification !== !versionChanged) {
+          if (versionNotification) {
+            notifications.dismiss(versionNotification);
+            versionNotification = null;
+          } else {
+            versionNotification = notifications.push(
+              "warning",
+              "Server has been updated, please reload the page",
+              {
+                Reload: () => {
+                  window.location.reload();
+                }
+              }
+            );
+          }
+        }
+      }
+    }
+  });
+}
+
+setInterval(checkConnection, 3000);
+
 export async function xhrRequest(
   options: { url: string } & m.RequestOptions<{}>
 ): Promise<any> {
@@ -99,32 +164,21 @@ export async function xhrRequest(
     xhr: XMLHttpRequest,
     _options?: { url: string } & m.RequestOptions<{}>
   ): any => {
-    if (
-      !refreshNotification &&
-      configSnapshot !== xhr.getResponseHeader("x-config-snapshot")
-    ) {
-      refreshNotification = notifications.push(
-        "warning",
-        "Configuration has been modified, please reload the page",
-        {
-          Reload: () => {
-            window.location.reload();
-          }
-        }
-      );
-    }
-
     if (typeof extract === "function") return extract(xhr, _options);
 
     let response: any;
     if (typeof deserialize === "function") {
       response = deserialize(xhr.responseText);
-    } else {
+    } else if (
+      xhr.getResponseHeader("content-type").startsWith("application/json")
+    ) {
       try {
         response = xhr.responseText ? JSON.parse(xhr.responseText) : null;
       } catch (err) {
-        throw new Error("Invalid JSON: " + response);
+        throw new Error("Invalid JSON: " + xhr.responseText.slice(0, 80));
       }
+    } else {
+      response = xhr.responseText;
     }
 
     // https://mithril.js.org/request.html#error-handling
@@ -245,22 +299,6 @@ function compareFunction(sort: {
 }
 
 function findMatches(resourceType, filter, sort, limit): any[] {
-  // Handle "tag =" and "tag <>" special cases
-  if (resourceType === "devices") {
-    filter = map(filter, e => {
-      if (
-        Array.isArray(e) &&
-        Array.isArray(e[1]) &&
-        e[1][0] === "PARAM" &&
-        e[1][1] === "tag"
-      ) {
-        if (e[0] === "=") return ["IS NOT NULL", ["PARAM", `Tags.${e[2]}`]];
-        else if (e[0] === "<>") return ["IS NULL", ["PARAM", `Tags.${e[2]}`]];
-      }
-      return e;
-    });
-  }
-
   let value = [];
   for (const obj of resources[resourceType].objects.values())
     if (evaluate(filter, obj, fulfillTimestamp)) value.push(obj);
@@ -551,7 +589,7 @@ export function postTasks(deviceId, tasks): Promise<string> {
   return xhrRequest({
     method: "POST",
     url: `/api/devices/${encodeURIComponent(deviceId)}/tasks`,
-    data: tasks,
+    body: tasks,
     extract: xhr => {
       if (xhr.status !== 200) throw new Error(xhr.response);
       const connectionRequestStatus = xhr.getResponseHeader(
@@ -572,7 +610,7 @@ export function updateTags(deviceId, tags): Promise<void> {
   return xhrRequest({
     method: "POST",
     url: `/api/devices/${encodeURIComponent(deviceId)}/tags`,
-    data: tags
+    body: tags
   });
 }
 
@@ -589,7 +627,7 @@ export function putResource(resourceType, id, object): Promise<void> {
   return xhrRequest({
     method: "PUT",
     url: `/api/${resourceType}/${encodeURIComponent(id)}`,
-    data: object
+    body: object
   });
 }
 
@@ -627,13 +665,13 @@ export function changePassword(
   newPassword,
   authPassword?
 ): Promise<void> {
-  const data = { newPassword };
-  if (authPassword) data["authPassword"] = authPassword;
+  const body = { newPassword };
+  if (authPassword) body["authPassword"] = authPassword;
   return xhrRequest({
     method: "PUT",
     url: `/api/users/${username}/password`,
     background: true,
-    data
+    body
   });
 }
 
@@ -642,7 +680,7 @@ export function logIn(username, password): Promise<void> {
     method: "POST",
     url: "/login",
     background: true,
-    data: { username, password }
+    body: { username, password }
   });
 }
 
@@ -655,6 +693,7 @@ export function logOut(): Promise<void> {
 
 export function ping(host): Promise<{}> {
   return xhrRequest({
-    url: `/api/ping/${encodeURIComponent(host)}`
+    url: `/api/ping/${encodeURIComponent(host)}`,
+    background: true
   });
 }

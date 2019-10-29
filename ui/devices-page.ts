@@ -69,6 +69,12 @@ export function init(args): Promise<{}> {
     const filter = args.hasOwnProperty("filter") ? "" + args["filter"] : "";
     const sort = args.hasOwnProperty("sort") ? "" + args["sort"] : "";
     const indexParameters = Object.values(config.ui.index);
+    if (!indexParameters.length) {
+      indexParameters.push({
+        label: "ID",
+        parameter: ["PARAM", "DeviceID.ID"]
+      });
+    }
     resolve({ filter, indexParameters, sort });
   });
 }
@@ -257,7 +263,7 @@ export const component: ClosureComponent = (): Component => {
 
         const ops = { sort: JSON.stringify(_sort) };
         if (vnode.attrs["filter"]) ops["filter"] = vnode.attrs["filter"];
-        m.route.set(m.route.get(), ops);
+        m.route.set("/devices", ops);
       }
 
       let filter = vnode.attrs["filter"]
